@@ -1,0 +1,13 @@
+{
+  "MorphologyPath": "OutputTXT/Micro.txt",
+  "TimePath": "OutputTXT/Time.txt",
+  "StepTimePath": "OutputTXT/StepTimes.txt",
+  "FullSpaceSizeX": 100,
+  "FullSpaceSizeY": 100,
+  "FullSpaceSizeZ": 100,
+  "Neighbourhood": "Moore",
+  "BC": "Periodic",
+  "Nucleons": 100,
+  "SplitInZdim": 1,
+  "Seed": 10
+}

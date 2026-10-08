@@ -1,0 +1,18 @@
+# Wyniki kompilacji .NET
+bin/
+obj/
+
+# Wyniki symulacji (mikrostruktura potrafi mieć setki MB)
+OutputTXT/
+*.csv
+
+# Pliki IDE
+.vs/
+.idea/
+*.user
+*.suo
+.vscode/*
+
+# Pliki systemowe
+.DS_Store
+Thumbs.db
