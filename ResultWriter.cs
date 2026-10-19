@@ -48,8 +48,19 @@ public static class ResultWriter
         CreateDirectoryFor(path);
         using var writer = new StreamWriter(path, append: false);
 
-        writer.WriteLine("step;changed;empty_left;step_ms;cumulative_ms");
         double cumulative = 0;
+        if (log.McSteps.Count > 0)
+        {
+            writer.WriteLine("mcs;accepted;energy;step_ms;cumulative_ms");
+            foreach (var s in log.McSteps)
+            {
+                cumulative += s.Ms;
+                writer.WriteLine(string.Join(';', s.Step, s.Accepted, Format(s.Energy), Format(s.Ms), Format(cumulative)));
+            }
+            return;
+        }
+
+        writer.WriteLine("step;changed;empty_left;step_ms;cumulative_ms");
         foreach (var s in log.Steps)
         {
             cumulative += s.Ms;
@@ -57,24 +68,40 @@ public static class ResultWriter
         }
     }
 
+    private const string TimeHeader =
+        "date;algorithm;sizeX;sizeY;sizeZ;cells;nucleons_or_states;grains_end;neighbourhood;bc;steps;" +
+        "alloc_ms;init_ms;growth_ms;simulation_ms;file_create_ms;file_write_ms;file_mb;total_ms";
+
     // Czas symulacji – każde uruchomienie dopisuje jedną linię.
-    public static void AppendTime(string path, SimulationConfig c, int steps, SimulationLog log,
+    public static void AppendTime(string path, SimulationConfig c, int steps, int grainsEnd, SimulationLog log,
                                   double simulationMs, FileWriteTime file, double totalMs)
     {
         CreateDirectoryFor(path);
+        MoveAsideIfOldFormat(path);
         bool newFile = !File.Exists(path);
         using var writer = new StreamWriter(path, append: true);
 
         if (newFile)
-            writer.WriteLine("date;sizeX;sizeY;sizeZ;cells;nucleons;neighbourhood;bc;steps;" +
-                             "alloc_ms;nucleation_ms;growth_ms;simulation_ms;file_create_ms;file_write_ms;file_mb;total_ms");
+            writer.WriteLine(TimeHeader);
 
         writer.WriteLine(string.Join(';',
             DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
-            c.SizeX, c.SizeY, c.SizeZ, (long)c.SizeX * c.SizeY * c.SizeZ, c.Nucleons,
+            c.Algorithm, c.SizeX, c.SizeY, c.SizeZ, (long)c.SizeX * c.SizeY * c.SizeZ, c.InitialGrains, grainsEnd,
             c.Neighbourhood, c.Boundary, steps,
-            Format(log.AllocationMs), Format(log.NucleationMs), Format(log.GrowthMs), Format(simulationMs),
+            Format(log.AllocationMs), Format(log.InitMs), Format(log.GrowthMs), Format(simulationMs),
             Format(file.CreateMs), Format(file.WriteMs), Format(file.Bytes / 1e6), Format(totalMs)));
+    }
+
+    // Plik z poprzedniej wersji programu ma inne kolumny – nie dopisujemy do niego, tylko zmieniamy mu nazwę.
+    private static void MoveAsideIfOldFormat(string path)
+    {
+        if (!File.Exists(path) || File.ReadLines(path).FirstOrDefault() == TimeHeader)
+            return;
+
+        string oldPath = Path.Combine(Path.GetDirectoryName(path) ?? "",
+            $"{Path.GetFileNameWithoutExtension(path)}_old_{DateTime.Now:yyyyMMdd_HHmmss}{Path.GetExtension(path)}");
+        File.Move(path, oldPath);
+        Console.WriteLine($"Stary plik czasów ma inne kolumny – przeniesiony do {oldPath}");
     }
 
     // Kropka dziesiętna niezależnie od ustawień regionalnych (łatwiej wczytać do Excela/Pythona).

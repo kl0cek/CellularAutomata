@@ -27,7 +27,7 @@ public static class VectorGrainGrowth
         for (int n = 0; n < nuclei; n++)
             cells[positions[n]] = n + 1;
         if (log != null)
-            log.NucleationMs = Stopwatch.GetElapsedTime(t).TotalMilliseconds;
+            log.InitMs = Stopwatch.GetElapsedTime(t).TotalMilliseconds;
 
         // Rozrost: krok po kroku, aż nie zostanie żadna pusta komórka.
         var offsets = CaRules.BuildOffsets(neighbourhood, is3D: sizeZ > 1);

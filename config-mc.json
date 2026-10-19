@@ -1,0 +1,17 @@
+{
+  "Algorithm": "MC",
+  "MorphologyPath": "OutputTXT/MicroMC.txt",
+  "TimePath": "OutputTXT/Time.txt",
+  "StepTimePath": "OutputTXT/StepTimesMC.txt",
+  "FullSpaceSizeX": 100,
+  "FullSpaceSizeY": 100,
+  "FullSpaceSizeZ": 100,
+  "Neighbourhood": "Moore",
+  "BC": "Periodic",
+  "States": 50,
+  "McSteps": 20,
+  "J": 1.0,
+  "McProposal": "Random",
+  "SplitInZdim": 1,
+  "Seed": 1
+}
