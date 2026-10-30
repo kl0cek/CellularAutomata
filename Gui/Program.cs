@@ -49,7 +49,7 @@ app.MapPost("/api/series", (SeriesRequest request) =>
 // Zbiorcze wyniki zakończonych uruchomień: do wykresów porównawczych i jako plik CSV.
 app.MapGet("/api/results", () => runs.Results());
 app.MapGet("/api/results.csv", () =>
-    Results.File(System.Text.Encoding.UTF8.GetBytes(runs.ResultsCsv()), "text/csv; charset=utf-8", "wyniki.csv"));
+    Results.File(System.Text.Encoding.UTF8.GetBytes(ResultsTable.ToCsv(runs.Results())), "text/csv; charset=utf-8", "wyniki.csv"));
 
 app.MapGet("/api/runs/{id}", (string id) =>
     runs.Describe(id) is { } details ? Results.Ok(details) : Results.NotFound());
