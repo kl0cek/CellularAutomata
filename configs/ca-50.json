@@ -1,0 +1,13 @@
+{
+  "Algorithm": "CA",
+  "MorphologyPath": "Micro.txt",
+  "TimePath": "Time.txt",
+  "StepTimePath": "StepTimes.txt",
+  "FullSpaceSizeX": 50,
+  "FullSpaceSizeY": 50,
+  "FullSpaceSizeZ": 50,
+  "Neighbourhood": "Moore",
+  "BC": "Periodic",
+  "Nucleons": 100,
+  "Seed": 1
+}

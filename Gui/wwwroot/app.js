@@ -2,7 +2,8 @@ import { Volume, sliceShape, sliceCell, sliceRGBA } from './volume.js';
 
 const $ = id => document.getElementById(id);
 
-const STATUS_LABELS = { running: 'Trwa', done: 'Gotowe', failed: 'Błąd', unknown: 'Przerwane' };
+const STATUS_LABELS = { queued: 'W kolejce', running: 'Trwa', done: 'Gotowe', failed: 'Błąd', unknown: 'Przerwane' };
+const PENDING = new Set(['queued', 'running']);
 const TABS = ['slice', 'cube', 'steps', 'log'];
 
 const state = {
@@ -16,6 +17,10 @@ const state = {
   stepsText: '',
   tab: 'slice',
   config: null,
+  view: 'run',
+  listPoll: null,
+  results: [],
+  compareFilter: null,
 };
 
 // ---------- pomocnicze ----------
@@ -94,8 +99,8 @@ function fillForm(config) {
   updateAlgorithmFields();
 }
 
-function setErrors(errors) {
-  const list = $('form-errors');
+function setErrors(errors, listId = 'form-errors') {
+  const list = $(listId);
   list.replaceChildren(...errors.map(text => {
     const li = document.createElement('li');
     li.textContent = text;
@@ -169,6 +174,7 @@ async function refreshRunList() {
     meta.className = 'meta';
     meta.textContent = [
       runDate(run.id),
+      run.series ? 'seria' : null,
       run.grainsEnd ? `ziaren: ${number(run.grainsEnd, 0)}` : null,
       run.simulationMs ? formatMs(run.simulationMs) : null,
     ].filter(Boolean).join(' · ');
@@ -180,12 +186,23 @@ async function refreshRunList() {
     li.append(button);
     list.append(li);
   }
+
+  // Dopóki coś czeka w kolejce albo się liczy, lista odświeża się sama.
+  const pending = runs.some(run => PENDING.has(run.status));
+  if (pending && !state.listPoll) {
+    state.listPoll = setInterval(() => refreshRunList().catch(() => {}), 1500);
+  } else if (!pending && state.listPoll) {
+    clearInterval(state.listPoll);
+    state.listPoll = null;
+    if (state.view === 'compare') loadComparison().catch(() => {});
+  }
   return runs;
 }
 
 // ---------- wybrane uruchomienie ----------
 
 async function selectRun(id) {
+  if (state.view !== 'run') selectView('run');
   state.selectedId = id;
   state.resultsFor = null;
   state.volume = null;
@@ -218,8 +235,10 @@ async function updateRun(id, token) {
   renderSummary(run);
   $('log').textContent = run.log || '(brak wyjścia programu)';
 
-  if (run.status === 'running') {
-    showMessage('Symulacja trwa – wyniki pojawią się po jej zakończeniu.');
+  if (PENDING.has(run.status)) {
+    showMessage(run.status === 'queued'
+      ? 'W kolejce – obliczenia ruszą po zakończeniu wcześniejszych zleceń.'
+      : 'Symulacja trwa – wyniki pojawią się po jej zakończeniu.');
     if (!state.poll) {
       state.poll = setInterval(() => updateRun(id, token).catch(() => {}), 700);
     }
@@ -407,9 +426,10 @@ function drawSteps() {
   const points = rows.map(row => [row[0], row[yColumn]]);
   const totalMs = rows.at(-1)[header.indexOf('cumulative_ms')];
 
-  drawLineChart(canvas, points, {
+  drawChart(canvas, [{ name: '', color: '--chart-line', points }], {
     xLabel: isMc ? 'krok MCS' : 'krok CA',
     yLabel: isMc ? 'energia (pary sąsiadów na granicy)' : 'puste komórki',
+    integerX: true,
   });
 
   const first = points[0][1];
@@ -430,7 +450,8 @@ function niceTicks(min, max, count = 5) {
   return ticks;
 }
 
-function drawLineChart(canvas, points, { xLabel, yLabel }) {
+// Wykres liniowy z jedną albo kilkoma seriami: [{ name, color (nazwa tokenu CSS), points: [[x, y], …] }].
+function drawChart(canvas, series, { xLabel, yLabel, xFormat = v => String(v), integerX = false }) {
   const css = getComputedStyle(document.documentElement);
   const color = name => css.getPropertyValue(name).trim();
   const dpr = window.devicePixelRatio || 1;
@@ -444,13 +465,15 @@ function drawLineChart(canvas, points, { xLabel, yLabel }) {
   ctx.clearRect(0, 0, width, height);
   ctx.font = '12px ui-monospace, Menlo, monospace';
 
-  const pad = { left: 76, right: 16, top: 26, bottom: 40 };
-  const xs = points.map(p => p[0]);
-  const ys = points.map(p => p[1]);
+  const all = series.flatMap(s => s.points);
+  if (all.length === 0 || width === 0) return;
+
+  const pad = { left: 64, right: 16, top: 30, bottom: 40 };
+  const xs = all.map(p => p[0]);
   const xMin = Math.min(...xs), xMax = Math.max(...xs);
-  const yMin = 0, yMax = Math.max(...ys) * 1.05 || 1;
+  const yMax = Math.max(...all.map(p => p[1])) * 1.08 || 1;
   const X = v => pad.left + (v - xMin) / ((xMax - xMin) || 1) * (width - pad.left - pad.right);
-  const Y = v => height - pad.bottom - (v - yMin) / (yMax - yMin) * (height - pad.top - pad.bottom);
+  const Y = v => height - pad.bottom - v / yMax * (height - pad.top - pad.bottom);
   const compact = new Intl.NumberFormat('pl-PL', { notation: 'compact', maximumFractionDigits: 1 });
 
   // siatka i opisy osi
@@ -459,34 +482,226 @@ function drawLineChart(canvas, points, { xLabel, yLabel }) {
   ctx.lineWidth = 1;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  for (const v of niceTicks(yMin, yMax)) {
+  for (const v of niceTicks(0, yMax)) {
     ctx.beginPath(); ctx.moveTo(pad.left, Y(v)); ctx.lineTo(width - pad.right, Y(v)); ctx.stroke();
     ctx.fillText(compact.format(v), pad.left - 8, Y(v));
   }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  for (const v of niceTicks(xMin, xMax, Math.min(8, xMax - xMin || 1)).filter(Number.isInteger)) {
-    ctx.fillText(String(v), X(v), height - pad.bottom + 8);
-  }
+  const xTicks = niceTicks(xMin, xMax, 6).filter(v => !integerX || Number.isInteger(v));
+  for (const v of xTicks) ctx.fillText(xFormat(v), X(v), height - pad.bottom + 8);
   ctx.fillText(xLabel, pad.left + (width - pad.left - pad.right) / 2, height - 16);
   ctx.textAlign = 'left';
   ctx.fillText(yLabel, pad.left, 6);
 
-  // linia + punkty
-  ctx.strokeStyle = color('--chart-line');
-  ctx.fillStyle = color('--chart-line');
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  points.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(X(x), Y(y)) : ctx.lineTo(X(x), Y(y))));
-  ctx.stroke();
-  if (points.length <= 60) {
-    for (const [x, y] of points) {
-      ctx.beginPath(); ctx.arc(X(x), Y(y), 3, 0, Math.PI * 2); ctx.fill();
+  // legenda w prawym górnym rogu, gdy serii jest kilka
+  if (series.length > 1) {
+    ctx.textAlign = 'right';
+    let right = width - pad.right;
+    for (const s of [...series].reverse()) {
+      const textWidth = ctx.measureText(s.name).width;
+      ctx.fillStyle = color('--ink');
+      ctx.fillText(s.name, right, 6);
+      ctx.fillStyle = color(s.color);
+      ctx.fillRect(right - textWidth - 16, 7, 10, 10);
+      right -= textWidth + 32;
+    }
+  }
+
+  // linie + punkty
+  for (const s of series) {
+    ctx.strokeStyle = color(s.color);
+    ctx.fillStyle = color(s.color);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    s.points.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(X(x), Y(y)) : ctx.lineTo(X(x), Y(y))));
+    ctx.stroke();
+    if (s.points.length <= 60) {
+      for (const [x, y] of s.points) {
+        ctx.beginPath(); ctx.arc(X(x), Y(y), 3.5, 0, Math.PI * 2); ctx.fill();
+      }
     }
   }
 }
 
-window.addEventListener('resize', () => { if (state.tab === 'steps') drawSteps(); });
+window.addEventListener('resize', () => {
+  if (state.view === 'compare') renderComparison();
+  else if (state.tab === 'steps') drawSteps();
+});
+
+// ---------- seria uruchomień (Lab 6) ----------
+
+$('series-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  setErrors([], 'series-errors');
+  $('series-message').textContent = '';
+
+  const algorithms = [...document.querySelectorAll('input[name="series-algorithm"]:checked')].map(input => input.value);
+  const sizes = $('series-sizes').value.split(/[\s,;]+/).filter(Boolean).map(Number);
+  if (sizes.some(size => !Number.isInteger(size))) {
+    setErrors(['Rozmiary podaj jako liczby całkowite, np. 25, 50, 75.'], 'series-errors');
+    return;
+  }
+
+  const button = $('series-button');
+  button.disabled = true;
+  try {
+    const response = await fetch('/api/series', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        base: readForm(),
+        algorithms,
+        sizes,
+        repeats: Number.parseInt($('series-repeats').value, 10) || 0,
+      }),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      setErrors(Array.isArray(body?.errors) ? body.errors : [`Serwer odrzucił serię (kod ${response.status}).`], 'series-errors');
+      return;
+    }
+    state.compareFilter = body.series;
+    $('series-message').textContent =
+      `Utworzono ${body.ids.length} plików config.json – obliczenia idą po kolei. Wykresy: „Zestawienie wyników”.`;
+    await refreshRunList();
+  } catch {
+    setErrors(['Brak połączenia z serwerem GUI.'], 'series-errors');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+// ---------- widoki: uruchomienie / zestawienie ----------
+
+function selectView(view) {
+  state.view = view;
+  for (const button of document.querySelectorAll('.view-switch button')) {
+    button.setAttribute('aria-selected', String(button.dataset.view === view));
+  }
+  $('run-area').hidden = view !== 'run';
+  $('compare-view').hidden = view !== 'compare';
+  if (view === 'compare') {
+    loadComparison().catch(error => { $('compare-note').textContent = `Nie udało się wczytać wyników: ${error.message}`; });
+  } else if (state.tab === 'steps') {
+    drawSteps();
+  } else if (state.tab === 'cube') {
+    showCube();
+  }
+}
+
+for (const button of document.querySelectorAll('.view-switch button')) {
+  button.addEventListener('click', () => selectView(button.dataset.view));
+}
+
+// ---------- zestawienie wyników ----------
+
+const ALGORITHMS = [
+  { id: 'CA', name: 'Rozrost CA', color: '--series-ca' },
+  { id: 'MC', name: 'Monte Carlo', color: '--series-mc' },
+];
+
+// series_20261030_101500 → 30.10.2026 10:15:00
+function seriesDate(id) {
+  const m = /^series_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(id);
+  return m ? `${m[3]}.${m[2]}.${m[1]} ${m[4]}:${m[5]}:${m[6]}` : id;
+}
+
+async function loadComparison() {
+  state.results = await fetchJson('/api/results');
+  const seriesIds = [...new Set(state.results.map(r => r.series).filter(Boolean))].sort().reverse();
+
+  const filter = $('compare-filter');
+  filter.replaceChildren(
+    new Option('Wszystkie uruchomienia', ''),
+    ...seriesIds.map(id => new Option(`Seria z ${seriesDate(id)}`, id)));
+  // domyślnie najnowsza seria; wybór użytkownika zostaje
+  const wanted = state.compareFilter ?? seriesIds[0] ?? '';
+  filter.value = [...filter.options].some(o => o.value === wanted) ? wanted : '';
+  renderComparison();
+}
+
+$('compare-filter').addEventListener('change', event => {
+  state.compareFilter = event.target.value;
+  renderComparison();
+});
+
+function renderComparison() {
+  const filter = $('compare-filter').value;
+  const rows = state.results.filter(r => !filter || r.series === filter);
+  const tbody = document.querySelector('#compare-table tbody');
+  tbody.replaceChildren();
+
+  if (rows.length === 0) {
+    $('compare-note').textContent = 'Brak zakończonych uruchomień – uruchom serię w panelu po lewej.';
+    drawChart($('compare-time'), [], { xLabel: '', yLabel: '' });
+    drawChart($('compare-step'), [], { xLabel: '', yLabel: '' });
+    return;
+  }
+
+  // Każdy punkt to średnia z powtórzeń dla tej samej pary (algorytm, liczba komórek).
+  const groups = new Map();
+  for (const r of rows) {
+    const key = `${r.algorithm}|${r.cells}`;
+    const g = groups.get(key) ?? { algorithm: r.algorithm, cells: r.cells, sim: 0, step: 0, n: 0 };
+    g.sim += r.simulationMs;
+    g.step += r.steps ? r.growthMs / r.steps : 0;
+    g.n += 1;
+    groups.set(key, g);
+  }
+  const points = (algorithm, pick) => [...groups.values()]
+    .filter(g => g.algorithm === algorithm)
+    .sort((a, b) => a.cells - b.cells)
+    .map(g => [g.cells, pick(g)]);
+  const present = ALGORITHMS.filter(a => rows.some(r => r.algorithm === a.id));
+  const cellsFormat = new Intl.NumberFormat('pl-PL', { notation: 'compact', maximumFractionDigits: 1 });
+  const axis = { xLabel: 'liczba komórek', xFormat: v => cellsFormat.format(v) };
+
+  drawChart($('compare-time'),
+    present.map(a => ({ name: a.name, color: a.color, points: points(a.id, g => g.sim / g.n / 1000) })),
+    { ...axis, yLabel: 'czas symulacji [s]' });
+  drawChart($('compare-step'),
+    present.map(a => ({ name: a.name, color: a.color, points: points(a.id, g => g.step / g.n) })),
+    { ...axis, yLabel: 'czas jednego kroku [ms]' });
+
+  // Opis parametrów, żeby było wiadomo, co porównujemy.
+  const distinct = values => [...new Set(values.filter(v => v !== null && v !== undefined))].join(' / ');
+  const ca = rows.filter(r => r.algorithm === 'CA');
+  const mc = rows.filter(r => r.algorithm === 'MC');
+  const repeats = Math.max(...[...groups.values()].map(g => g.n));
+  $('compare-note').textContent = [
+    `${rows.length} uruchomień`,
+    ca.length ? `CA: zarodki ${distinct(ca.map(r => r.nucleons))}` : null,
+    mc.length ? `MC: Q = ${distinct(mc.map(r => r.states))}, kroki MCS ${distinct(mc.map(r => r.mcSteps))}, nowy stan ${distinct(mc.map(r => r.mcProposal === 'Neighbour' ? 'od sąsiada' : 'losowy'))}` : null,
+    `sąsiedztwo ${distinct(rows.map(r => r.neighbourhood))}, brzegi ${distinct(rows.map(r => r.boundary))}`,
+    repeats > 1 ? `punkt = średnia z ${repeats} powtórzeń` : null,
+  ].filter(Boolean).join(' · ');
+
+  const sorted = [...rows].sort((a, b) => a.algorithm.localeCompare(b.algorithm) || a.cells - b.cells || a.id.localeCompare(b.id));
+  for (const r of sorted) {
+    const tr = document.createElement('tr');
+    const cells = [
+      [r.algorithm === 'MC' ? 'Monte Carlo' : 'Rozrost CA', false],
+      [`${r.sizeX}×${r.sizeY}×${r.sizeZ}`, false],
+      [number(r.cells, 0), true],
+      [String(r.steps), true],
+      [number(r.grainsEnd, 0), true],
+      [formatMs(r.simulationMs), true],
+      [r.steps ? formatMs(r.growthMs / r.steps) : '–', true],
+      [`${number(r.fileMb, 1)} MB`, true],
+    ];
+    for (const [text, numeric] of cells) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if (numeric) td.className = 'num';
+      tr.append(td);
+    }
+    tr.title = 'Kliknij, żeby otworzyć to uruchomienie';
+    tr.style.cursor = 'pointer';
+    tr.addEventListener('click', () => { selectView('run'); selectRun(r.id); });
+    tbody.append(tr);
+  }
+}
 
 // ---------- start ----------
 

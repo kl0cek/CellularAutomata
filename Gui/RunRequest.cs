@@ -54,7 +54,8 @@ public sealed record RunRequest(
 
     // Konfiguracja w formacie, który czyta symulator (SimulationConfig).
     // Ścieżki są względne – symulator startuje w folderze danego uruchomienia.
-    public Dictionary<string, object> ToSimulatorConfig()
+    // Pole Series symulator pomija; GUI grupuje po nim uruchomienia jednej serii.
+    public Dictionary<string, object> ToSimulatorConfig(string? series = null)
     {
         var config = new Dictionary<string, object>
         {
@@ -82,7 +83,57 @@ public sealed record RunRequest(
             config["J"] = J;
             config["McProposal"] = McProposal;
         }
+        if (series != null)
+            config["Series"] = series;
         return config;
+    }
+}
+
+// Seria uruchomień (Lab 6): parametry bazowe z formularza × wybrane algorytmy × rozmiary × powtórzenia.
+// Rozmiar n oznacza siatkę n × n × n (albo n × n × 1, gdy formularz ma Z = 1).
+// Powtórzenia różnią się tylko seedem: seed, seed + 1, …
+public sealed record SeriesRequest(RunRequest Base, string[] Algorithms, int[] Sizes, int Repeats)
+{
+    public const int MaxRuns = 60;
+
+    public List<RunRequest> Expand() =>
+        (from algorithm in Algorithms.Distinct()
+         from size in Sizes.Distinct().Order()
+         from repeat in Enumerable.Range(0, Repeats)
+         select Base with
+         {
+             Algorithm = algorithm,
+             SizeX = size,
+             SizeY = size,
+             SizeZ = Base.SizeZ == 1 ? 1 : size,
+             Seed = Base.Seed + repeat,
+         }).ToList();
+
+    public List<string> Validate()
+    {
+        var errors = new List<string>();
+        if (Algorithms is not { Length: > 0 })
+            errors.Add("Wybierz co najmniej jeden algorytm.");
+        if (Sizes is not { Length: > 0 })
+            errors.Add("Podaj co najmniej jeden rozmiar siatki.");
+        if (Repeats is < 1 or > 5)
+            errors.Add("Liczba powtórzeń musi być od 1 do 5.");
+        if (errors.Count > 0)
+            return errors;
+
+        var runs = Expand();
+        if (runs.Count > MaxRuns)
+            errors.Add($"Seria ma {runs.Count} uruchomień, maksimum to {MaxRuns}.");
+
+        // Błędy pojedynczych zleceń, każdy tylko raz (np. ten sam za duży rozmiar dla CA i MC).
+        foreach (var run in runs)
+            foreach (string error in run.Validate())
+            {
+                string message = $"{run.Algorithm}, rozmiar {run.SizeX}: {error}";
+                if (!errors.Contains(message))
+                    errors.Add(message);
+            }
+        return errors;
     }
 }
 

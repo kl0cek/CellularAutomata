@@ -88,6 +88,26 @@
         <ul id="form-errors" class="errors" role="alert"></ul>
       </form>
 
+      <form id="series-form" class="card" novalidate>
+        <h2>Seria uruchomień</h2>
+        <p class="hint">Parametry bazowe (sąsiedztwo, brzegi, zarodki, Q, kroki MCS, seed) bierze z formularza powyżej.
+          Najpierw powstają wszystkie pliki config.json, potem obliczenia idą po kolei.</p>
+        <fieldset>
+          <legend>Algorytmy</legend>
+          <div class="segmented">
+            <label><input type="checkbox" name="series-algorithm" value="CA" checked> Rozrost CA</label>
+            <label><input type="checkbox" name="series-algorithm" value="MC" checked> Monte Carlo</label>
+          </div>
+        </fieldset>
+        <div class="row2">
+          <label>Rozmiary n (siatka n³) <input id="series-sizes" type="text" value="25, 50, 75, 100"></label>
+          <label>Powtórzenia <input id="series-repeats" type="number" min="1" max="5" value="1"></label>
+        </div>
+        <button id="series-button" type="submit">Wygeneruj pliki i uruchom serię</button>
+        <ul id="series-errors" class="errors" role="alert"></ul>
+        <p id="series-message" class="hint"></p>
+      </form>
+
       <section class="card">
         <h2>Uruchomienia</h2>
         <ul id="run-list" class="run-list"></ul>
@@ -95,6 +115,43 @@
     </aside>
 
     <section class="results card">
+      <div class="view-switch" role="tablist">
+        <button type="button" role="tab" data-view="run" aria-selected="true">Uruchomienie</button>
+        <button type="button" role="tab" data-view="compare" aria-selected="false">Zestawienie wyników</button>
+      </div>
+
+      <div id="compare-view" hidden>
+        <div class="controls">
+          <label>Uruchomienia
+            <select id="compare-filter"></select>
+          </label>
+          <a id="csv-link" class="button-link" href="/api/results.csv">Pobierz CSV</a>
+        </div>
+        <p id="compare-note" class="muted"></p>
+        <div class="charts">
+          <figure>
+            <figcaption>Czas symulacji a liczba komórek</figcaption>
+            <canvas id="compare-time" class="chart"></canvas>
+          </figure>
+          <figure>
+            <figcaption>Średni czas jednego kroku a liczba komórek</figcaption>
+            <canvas id="compare-step" class="chart"></canvas>
+          </figure>
+        </div>
+        <div class="table-wrap">
+          <table id="compare-table">
+            <thead>
+              <tr>
+                <th>Algorytm</th><th>Siatka</th><th class="num">Komórki</th><th class="num">Kroki</th>
+                <th class="num">Ziarna</th><th class="num">Symulacja</th><th class="num">Krok (śr.)</th><th class="num">Plik</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="run-area">
       <div id="empty-state" class="empty">
         <h2>Brak wybranego uruchomienia</h2>
         <p>Ustaw parametry po lewej i kliknij „Uruchom symulację” albo wybierz wcześniejsze uruchomienie z listy.</p>
@@ -159,6 +216,7 @@
         <div id="tab-log" class="tab-panel" hidden>
           <pre id="log" class="log"></pre>
         </div>
+      </div>
       </div>
     </section>
   </main>

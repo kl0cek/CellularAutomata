@@ -4,15 +4,20 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Channels;
 
 namespace CellularAutomata.Gui;
 
 // Uruchomienia symulatora: każde dostaje własny folder (config.json + wyniki),
 // a symulator startuje jako osobny proces – dokładnie tak, jak wersja serwerowa z terminala.
+// Zlecenia trafiają do kolejki i liczą się po jednym, żeby czasy z serii były porównywalne.
 public sealed partial class RunManager
 {
     private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
     private readonly ConcurrentDictionary<string, ActiveRun> _active = new();
+    private readonly Channel<string> _queue = Channel.CreateUnbounded<string>();
+    private readonly object _idLock = new();
+    private DateTime _lastIdTime = DateTime.MinValue;
 
     public string SimulatorDll { get; }
     public string RunsDirectory { get; }
@@ -21,65 +26,28 @@ public sealed partial class RunManager
     {
         SimulatorDll = simulatorDll;
         RunsDirectory = runsDirectory;
+        _ = Task.Run(ProcessQueueAsync);
     }
 
     public bool SimulatorFound => File.Exists(SimulatorDll);
 
-    public string Start(RunRequest request)
+    // Tworzy folder z config.json i dopisuje uruchomienie do kolejki. series łączy uruchomienia jednej serii.
+    public string Enqueue(RunRequest request, string? series = null)
     {
-        // Folder na wyniki: run_RRRRMMDD_GGMMSS_mmm, sortuje się chronologicznie.
-        string id = "run_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
+        string id = NewId();
         string folder = Path.Combine(RunsDirectory, id);
         Directory.CreateDirectory(folder);
-
         File.WriteAllText(Path.Combine(folder, RunFiles.Config),
-            JsonSerializer.Serialize(request.ToSimulatorConfig(), Indented));
+            JsonSerializer.Serialize(request.ToSimulatorConfig(series), Indented));
 
-        // DOTNET_HOST_PATH ustawia polecenie `dotnet run`; bez niego bierzemy `dotnet` z PATH.
-        var startInfo = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
-        {
-            WorkingDirectory = folder,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        startInfo.ArgumentList.Add(SimulatorDll);
-        startInfo.ArgumentList.Add(RunFiles.Config);
-
-        var run = new ActiveRun();
-        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        process.OutputDataReceived += (_, e) => run.AppendLine(e.Data);
-        process.ErrorDataReceived += (_, e) => run.AppendLine(e.Data);
-        process.Exited += (_, _) =>
-        {
-            process.WaitForExit(); // czeka, aż dojdą ostatnie linie wyjścia
-            bool ok = process.ExitCode == 0 && File.Exists(Path.Combine(folder, RunFiles.Micro));
-            run.Finish(ok);
-            File.WriteAllText(Path.Combine(folder, RunFiles.Console), run.Log);
-            process.Dispose();
-        };
-
-        _active[id] = run;
-        process.Start();
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
+        _active[id] = new ActiveRun();
+        _queue.Writer.TryWrite(id);
         return id;
     }
 
     // Wszystkie uruchomienia z dysku, od najnowszego.
-    public List<RunSummary> List()
-    {
-        if (!Directory.Exists(RunsDirectory))
-            return new List<RunSummary>();
-
-        return Directory.GetDirectories(RunsDirectory)
-            .Select(Path.GetFileName)
-            .Where(name => name != null && IdPattern().IsMatch(name))
-            .OrderByDescending(name => name, StringComparer.Ordinal)
-            .Take(50)
-            .Select(id => Summarize(id!))
-            .ToList();
-    }
+    public List<RunSummary> List() =>
+        RunIds().Take(200).Select(Summarize).ToList();
 
     public RunDetails? Describe(string id)
     {
@@ -101,12 +69,141 @@ public sealed partial class RunManager
             Log: log);
     }
 
+    // Wyniki wszystkich zakończonych uruchomień – dane do zbiorczych wykresów i pliku CSV.
+    public List<RunResult> Results()
+    {
+        var results = new List<RunResult>();
+        foreach (string id in RunIds())
+        {
+            string folder = Path.Combine(RunsDirectory, id);
+            _active.TryGetValue(id, out var active);
+            if (StatusOf(folder, active) != "done")
+                continue;
+
+            var c = ReadConfig(folder);
+            var s = ReadTimeSummary(folder);
+            if (c == null || s == null)
+                continue;
+
+            results.Add(new RunResult(
+                Id: id,
+                Series: Text(c, "Series"),
+                Algorithm: Text(c, "Algorithm") ?? "CA",
+                SizeX: Int(c, "FullSpaceSizeX"), SizeY: Int(c, "FullSpaceSizeY"), SizeZ: Int(c, "FullSpaceSizeZ"),
+                Cells: (long)Number(s, "cells"),
+                Neighbourhood: Text(c, "Neighbourhood") ?? "",
+                Boundary: Text(c, "BC") ?? "",
+                Nucleons: Int(c, "Nucleons"),
+                States: Int(c, "States"),
+                McSteps: Int(c, "McSteps"),
+                McProposal: Text(c, "McProposal"),
+                Seed: Int(c, "Seed"),
+                Steps: (int)Number(s, "steps"),
+                GrainsEnd: (int)Number(s, "grains_end"),
+                SimulationMs: Number(s, "simulation_ms"),
+                GrowthMs: Number(s, "growth_ms"),
+                FileWriteMs: Number(s, "file_write_ms"),
+                FileMb: Number(s, "file_mb"),
+                TotalMs: Number(s, "total_ms")));
+        }
+        return results;
+    }
+
+    // Te same wyniki jako CSV (średniki, kropka dziesiętna) – do Excela albo Pythona.
+    public string ResultsCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("id;series;algorithm;sizeX;sizeY;sizeZ;cells;neighbourhood;bc;nucleons;states;mc_steps;mc_proposal;seed;" +
+                      "steps;grains_end;simulation_ms;growth_ms;file_write_ms;file_mb;total_ms");
+        foreach (var r in Results())
+        {
+            sb.AppendLine(string.Join(';',
+                r.Id, r.Series, r.Algorithm, r.SizeX, r.SizeY, r.SizeZ, r.Cells, r.Neighbourhood, r.Boundary,
+                r.Nucleons, r.States, r.McSteps, r.McProposal, r.Seed, r.Steps, r.GrainsEnd,
+                Invariant(r.SimulationMs), Invariant(r.GrowthMs), Invariant(r.FileWriteMs), Invariant(r.FileMb), Invariant(r.TotalMs)));
+        }
+        return sb.ToString();
+    }
+
     // Ścieżka do pliku wynikowego danego uruchomienia albo null, gdy nie istnieje.
     public string? FileOf(string id, string fileName)
     {
         string? folder = FolderOf(id);
         string? path = folder == null ? null : Path.Combine(folder, fileName);
         return path != null && File.Exists(path) ? path : null;
+    }
+
+    // Kolejka: zlecenia liczą się po kolei, jedno po drugim.
+    private async Task ProcessQueueAsync()
+    {
+        await foreach (string id in _queue.Reader.ReadAllAsync())
+        {
+            var run = _active[id];
+            string folder = Path.Combine(RunsDirectory, id);
+            try
+            {
+                await RunSimulatorAsync(folder, run);
+            }
+            catch (Exception ex)
+            {
+                run.AppendLine($"Nie udało się uruchomić symulatora: {ex.Message}");
+                run.Finish(ok: false);
+                File.WriteAllText(Path.Combine(folder, RunFiles.Console), run.Log);
+            }
+        }
+    }
+
+    private async Task RunSimulatorAsync(string folder, ActiveRun run)
+    {
+        // DOTNET_HOST_PATH ustawia polecenie `dotnet run`; bez niego bierzemy `dotnet` z PATH.
+        var startInfo = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
+        {
+            WorkingDirectory = folder,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add(SimulatorDll);
+        startInfo.ArgumentList.Add(RunFiles.Config);
+
+        using var process = new Process { StartInfo = startInfo };
+        process.OutputDataReceived += (_, e) => run.AppendLine(e.Data);
+        process.ErrorDataReceived += (_, e) => run.AppendLine(e.Data);
+
+        run.MarkStarted();
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        await process.WaitForExitAsync();
+        process.WaitForExit(); // czeka, aż dojdą ostatnie linie wyjścia
+
+        bool ok = process.ExitCode == 0 && File.Exists(Path.Combine(folder, RunFiles.Micro));
+        run.Finish(ok);
+        File.WriteAllText(Path.Combine(folder, RunFiles.Console), run.Log);
+    }
+
+    // Folder na wyniki: run_RRRRMMDD_GGMMSS_mmm. Przy serii kilka folderów powstaje w tej samej
+    // milisekundzie, więc każdy kolejny identyfikator jest o co najmniej 1 ms późniejszy.
+    private string NewId()
+    {
+        lock (_idLock)
+        {
+            var now = DateTime.Now;
+            _lastIdTime = now > _lastIdTime.AddMilliseconds(1) ? now : _lastIdTime.AddMilliseconds(1);
+            return "run_" + _lastIdTime.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
+        }
+    }
+
+    private IEnumerable<string> RunIds()
+    {
+        if (!Directory.Exists(RunsDirectory))
+            return Enumerable.Empty<string>();
+
+        return Directory.GetDirectories(RunsDirectory)
+            .Select(Path.GetFileName)
+            .OfType<string>()
+            .Where(name => IdPattern().IsMatch(name))
+            .OrderByDescending(name => name, StringComparer.Ordinal);
     }
 
     private RunSummary Summarize(string id)
@@ -119,9 +216,10 @@ public sealed partial class RunManager
         return new RunSummary(
             Id: id,
             Status: StatusOf(folder, active),
-            Algorithm: config?.GetValueOrDefault("Algorithm")?.ToString(),
+            Algorithm: config == null ? null : Text(config, "Algorithm"),
             Size: config == null ? null
-                : $"{config.GetValueOrDefault("FullSpaceSizeX")}×{config.GetValueOrDefault("FullSpaceSizeY")}×{config.GetValueOrDefault("FullSpaceSizeZ")}",
+                : $"{Int(config, "FullSpaceSizeX")}×{Int(config, "FullSpaceSizeY")}×{Int(config, "FullSpaceSizeZ")}",
+            Series: config == null ? null : Text(config, "Series"),
             GrainsEnd: summary?.GetValueOrDefault("grains_end"),
             SimulationMs: summary?.GetValueOrDefault("simulation_ms"));
     }
@@ -176,18 +274,29 @@ public sealed partial class RunManager
         return header.Zip(values).ToDictionary(p => p.First, p => p.Second);
     }
 
+    private static string? Text(Dictionary<string, object> config, string key) =>
+        config.TryGetValue(key, out var value) ? value?.ToString() : null;
+
+    private static int? Int(Dictionary<string, object> config, string key) =>
+        int.TryParse(Text(config, key), NumberStyles.Integer, CultureInfo.InvariantCulture, out int value) ? value : null;
+
+    private static double Number(Dictionary<string, string> summary, string key) =>
+        double.TryParse(summary.GetValueOrDefault(key), NumberStyles.Float, CultureInfo.InvariantCulture, out double value) ? value : 0;
+
+    private static string Invariant(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
+
     [GeneratedRegex(@"^run_\d{8}_\d{6}_\d{3}$")]
     private static partial Regex IdPattern();
 
-    // Stan uruchomienia, które wystartowało w tej sesji serwera.
+    // Stan uruchomienia zleconego w tej sesji serwera: w kolejce → trwa → gotowe / błąd.
     private sealed class ActiveRun
     {
         private readonly StringBuilder _log = new();
-        private readonly Stopwatch _clock = Stopwatch.StartNew();
+        private readonly Stopwatch _clock = new();
         private double? _finishedSeconds;
 
-        public string Status { get; private set; } = "running";
-        public double ElapsedSeconds => _finishedSeconds ?? _clock.Elapsed.TotalSeconds;
+        public string Status { get; private set; } = "queued";
+        public double? ElapsedSeconds => Status == "queued" ? null : _finishedSeconds ?? _clock.Elapsed.TotalSeconds;
 
         public string Log
         {
@@ -202,6 +311,12 @@ public sealed partial class RunManager
                 _log.AppendLine(line);
         }
 
+        public void MarkStarted()
+        {
+            Status = "running";
+            _clock.Start();
+        }
+
         public void Finish(bool ok)
         {
             _finishedSeconds = _clock.Elapsed.TotalSeconds;
@@ -210,8 +325,14 @@ public sealed partial class RunManager
     }
 }
 
-public sealed record RunSummary(string Id, string Status, string? Algorithm, string? Size, string? GrainsEnd, string? SimulationMs);
+public sealed record RunSummary(string Id, string Status, string? Algorithm, string? Size, string? Series,
+                                string? GrainsEnd, string? SimulationMs);
 
 public sealed record RunDetails(
     string Id, string Status, string Folder, double? ElapsedSeconds,
     Dictionary<string, object>? Config, Dictionary<string, string>? Summary, string Log);
+
+public sealed record RunResult(
+    string Id, string? Series, string Algorithm, int? SizeX, int? SizeY, int? SizeZ, long Cells,
+    string Neighbourhood, string Boundary, int? Nucleons, int? States, int? McSteps, string? McProposal, int? Seed,
+    int Steps, int GrainsEnd, double SimulationMs, double GrowthMs, double FileWriteMs, double FileMb, double TotalMs);

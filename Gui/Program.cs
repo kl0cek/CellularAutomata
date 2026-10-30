@@ -28,9 +28,28 @@ app.MapPost("/api/runs", (RunRequest request) =>
     if (!runs.SimulatorFound)
         return Results.BadRequest(new { errors = new[] { $"Nie znaleziono symulatora: {runs.SimulatorDll}. Zbuduj go: dotnet build -c Release." } });
 
-    string id = runs.Start(request);
+    string id = runs.Enqueue(request);
     return Results.Ok(runs.Describe(id));
 });
+
+// Seria (Lab 6): najpierw powstają wszystkie pliki config.json, potem obliczenia idą po kolei w kolejce.
+app.MapPost("/api/series", (SeriesRequest request) =>
+{
+    var errors = request.Validate();
+    if (errors.Count > 0)
+        return Results.BadRequest(new { errors });
+    if (!runs.SimulatorFound)
+        return Results.BadRequest(new { errors = new[] { $"Nie znaleziono symulatora: {runs.SimulatorDll}. Zbuduj go: dotnet build -c Release." } });
+
+    string series = "series_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+    var ids = request.Expand().Select(run => runs.Enqueue(run, series)).ToList();
+    return Results.Ok(new { series, ids });
+});
+
+// Zbiorcze wyniki zakończonych uruchomień: do wykresów porównawczych i jako plik CSV.
+app.MapGet("/api/results", () => runs.Results());
+app.MapGet("/api/results.csv", () =>
+    Results.File(System.Text.Encoding.UTF8.GetBytes(runs.ResultsCsv()), "text/csv; charset=utf-8", "wyniki.csv"));
 
 app.MapGet("/api/runs/{id}", (string id) =>
     runs.Describe(id) is { } details ? Results.Ok(details) : Results.NotFound());
