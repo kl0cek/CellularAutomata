@@ -6,4 +6,12 @@
     <Nullable>enable</Nullable>
     <RootNamespace>CellularAutomata</RootNamespace>
   </PropertyGroup>
+
+  <!-- Gui/ to osobny projekt (część użytkowa, Lab 5) – nie wchodzi do symulatora. -->
+  <ItemGroup>
+    <Compile Remove="Gui/**" />
+    <Content Remove="Gui/**" />
+    <None Remove="Gui/**" />
+    <EmbeddedResource Remove="Gui/**" />
+  </ItemGroup>
 </Project>

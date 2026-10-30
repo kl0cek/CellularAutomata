@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Generator mikrostruktury</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    { "imports": { "three": "./lib/three.module.js", "three/addons/": "./lib/addons/" } }
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>Generator mikrostruktury</h1>
+    <p>Rozrost ziaren CA i Monte Carlo · siatka 2D/3D</p>
+  </header>
+
+  <p id="simulator-warning" class="banner" hidden></p>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <form id="run-form" class="card" novalidate>
+        <h2>Nowa symulacja</h2>
+
+        <fieldset>
+          <legend>Przestrzeń (komórki)</legend>
+          <div class="row3">
+            <label>X <input id="size-x" name="sizeX" type="number" min="3" value="100" required></label>
+            <label>Y <input id="size-y" name="sizeY" type="number" min="3" value="100" required></label>
+            <label>Z <input id="size-z" name="sizeZ" type="number" min="1" value="100" required></label>
+          </div>
+          <p class="hint">Z = 1 daje mikrostrukturę 2D. Maksymalnie 8 mln komórek (200³).</p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Algorytm</legend>
+          <div class="segmented">
+            <label><input type="radio" name="algorithm" value="CA" checked> Rozrost CA</label>
+            <label><input type="radio" name="algorithm" value="MC"> Monte Carlo</label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Sąsiedztwo i brzegi</legend>
+          <div class="row2">
+            <label>Sąsiedztwo
+              <select id="neighbourhood" name="neighbourhood">
+                <option value="Moore">Moore (26 / 8)</option>
+                <option value="VonNeumann">von Neumann (6 / 4)</option>
+              </select>
+            </label>
+            <label>Warunki brzegowe
+              <select id="boundary" name="boundary">
+                <option value="Periodic">periodyczne</option>
+                <option value="Absorbing">pochłaniające</option>
+              </select>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset id="ca-params">
+          <legend>Rozrost CA</legend>
+          <label>Liczba zarodków <input id="nucleons" name="nucleons" type="number" min="1" value="100"></label>
+        </fieldset>
+
+        <fieldset id="mc-params" hidden>
+          <legend>Monte Carlo</legend>
+          <div class="row2">
+            <label>Liczba stanów Q <input id="states" name="states" type="number" min="2" value="50"></label>
+            <label>Kroki MCS <input id="mc-steps" name="mcSteps" type="number" min="1" value="20"></label>
+            <label>Energia granicy J <input id="j" name="j" type="number" min="0.01" step="0.01" value="1"></label>
+            <label>Nowy stan
+              <select id="mc-proposal" name="mcProposal">
+                <option value="Random">losowy z 1..Q</option>
+                <option value="Neighbour">od sąsiada</option>
+              </select>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Losowanie</legend>
+          <label>Seed <input id="seed" name="seed" type="number" value="1"></label>
+          <p class="hint">Ten sam seed daje tę samą mikrostrukturę.</p>
+        </fieldset>
+
+        <button id="run-button" type="submit">Uruchom symulację</button>
+        <ul id="form-errors" class="errors" role="alert"></ul>
+      </form>
+
+      <section class="card">
+        <h2>Uruchomienia</h2>
+        <ul id="run-list" class="run-list"></ul>
+      </section>
+    </aside>
+
+    <section class="results card">
+      <div id="empty-state" class="empty">
+        <h2>Brak wybranego uruchomienia</h2>
+        <p>Ustaw parametry po lewej i kliknij „Uruchom symulację” albo wybierz wcześniejsze uruchomienie z listy.</p>
+      </div>
+
+      <div id="run-view" hidden>
+        <div class="run-head">
+          <div>
+            <h2 id="run-title"></h2>
+            <p id="run-folder" class="mono muted"></p>
+          </div>
+          <div class="run-head-side">
+            <span id="run-status" class="badge"></span>
+            <span id="run-elapsed" class="mono muted"></span>
+            <button id="reuse-button" type="button" class="secondary">Użyj tych parametrów</button>
+          </div>
+        </div>
+
+        <dl id="run-summary" class="summary"></dl>
+
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" data-tab="slice" aria-selected="true">Przekrój 2D</button>
+          <button type="button" role="tab" data-tab="cube" aria-selected="false">Kostka 3D</button>
+          <button type="button" role="tab" data-tab="steps" aria-selected="false">Przebieg</button>
+          <button type="button" role="tab" data-tab="log" aria-selected="false">Konsola</button>
+        </div>
+
+        <p id="view-message" class="muted"></p>
+
+        <div id="tab-slice" class="tab-panel">
+          <div class="controls">
+            <label>Płaszczyzna
+              <select id="plane">
+                <option value="XY">XY (z = const)</option>
+                <option value="XZ">XZ (y = const)</option>
+                <option value="YZ">YZ (x = const)</option>
+              </select>
+            </label>
+            <label class="grow">Warstwa <span id="layer-label" class="mono"></span>
+              <input id="layer" type="range" min="0" value="0">
+            </label>
+          </div>
+          <div class="canvas-wrap">
+            <canvas id="slice-canvas"></canvas>
+          </div>
+          <p id="slice-hover" class="mono muted">Najedź na przekrój, żeby zobaczyć komórkę.</p>
+        </div>
+
+        <div id="tab-cube" class="tab-panel" hidden>
+          <div id="cube-container" class="cube"></div>
+          <div class="controls">
+            <p class="muted">Przeciągnij, żeby obrócić · kółko myszy przybliża · osie: x czerwona, y zielona, z niebieska</p>
+            <button id="reset-view" type="button" class="secondary">Widok początkowy</button>
+          </div>
+        </div>
+
+        <div id="tab-steps" class="tab-panel" hidden>
+          <canvas id="steps-chart" class="chart"></canvas>
+          <p id="steps-note" class="muted"></p>
+        </div>
+
+        <div id="tab-log" class="tab-panel" hidden>
+          <pre id="log" class="log"></pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

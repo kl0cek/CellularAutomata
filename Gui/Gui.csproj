@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>CellularAutomata.Gui</RootNamespace>
+  </PropertyGroup>
+
+  <!-- GUI uruchamia symulator (wersję serwerową) jako osobny proces, więc przed GUI budujemy go w Release. -->
+  <Target Name="BuildSimulator" BeforeTargets="Build">
+    <MSBuild Projects="../CellularAutomata.csproj" Targets="Build" Properties="Configuration=Release" />
+  </Target>
+</Project>
