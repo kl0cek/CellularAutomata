@@ -8,6 +8,14 @@ using CellularAutomata;
 //   dotnet run -c Release -- bench         → porównanie czasu: wektor vs macierz
 //   dotnet run -c Release -- bench-opt     → wersja naiwna vs zoptymalizowana (Lab 8)
 //   dotnet run -c Release -- demo          → podgląd MC na małej siatce 2D
+//
+// Struktura:
+//   Core/        – wspólne dla CA i MC: sąsiedztwa i brzegi (CaRules), indeksy sąsiadów, liczenie ziaren
+//   Ca/          – rozrost ziaren CA: wektor, macierz, wersja zoptymalizowana (front)
+//   MonteCarlo/  – rozrost ziaren MC: wersja naiwna, zoptymalizowana, tryb demo
+//   IO/          – konfiguracja (config.json), log czasów, zapis wyników
+//   Benchmarks/  – porównania wydajności (bench, bench-opt)
+//   Gui/         – osobny projekt: interfejs WWW (Lab 5–6)
 
 #if DEBUG
 Console.WriteLine("UWAGA: build Debug – czasy będą zawyżone. Uruchom: dotnet run -c Release\n");
