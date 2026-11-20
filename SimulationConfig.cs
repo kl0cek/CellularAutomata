@@ -27,6 +27,9 @@ public sealed class SimulationConfig
     public int SplitInZdim { get; init; } = 1;
     public int Seed { get; init; } = 1;
 
+    // Lab 8: true – wersja zoptymalizowana (domyślnie), false – naiwna z projektu 1. Wynik jest ten sam.
+    public bool Optimized { get; init; } = true;
+
     // CA: liczba zarodków.
     public int Nucleons { get; init; }
 

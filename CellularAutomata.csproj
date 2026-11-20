@@ -5,6 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>CellularAutomata</RootNamespace>
+    <!-- Lab 8: metody z pętlami od razu kompilowane z pełną optymalizacją (bez wersji „szybkiej, ale wolnej”
+         na start). Pomaga zwłaszcza krótkim uruchomieniom: główna pętla symulacji to jedno długie wywołanie. -->
+    <TieredCompilationQuickJitForLoops>false</TieredCompilationQuickJitForLoops>
   </PropertyGroup>
 
   <!-- Gui/ to osobny projekt (część użytkowa, Lab 5) – nie wchodzi do symulatora. -->

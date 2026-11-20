@@ -49,4 +49,44 @@ public static class GrainAnalysis
         }
         return grains;
     }
+
+    // To samo co CountGrains, ale z NeighbourIndex (bez warunków brzegowych dla komórek wewnętrznych)
+    // i stosem w zwykłej tablicy zamiast Stack<int> (Lab 8). Wynik jest identyczny.
+    public static int CountGrainsFast(int[] cells, int sizeX, int sizeY, int sizeZ,
+                                      Neighbourhood neighbourhood, Boundary boundary)
+    {
+        var index = new NeighbourIndex(sizeX, sizeY, sizeZ, neighbourhood, boundary);
+        var neighbours = new int[index.Count];
+        var visited = new bool[cells.Length];
+        var stack = new int[cells.Length]; // każda komórka trafia na stos co najwyżej raz
+        int grains = 0;
+
+        for (int start = 0; start < cells.Length; start++)
+        {
+            if (visited[start])
+                continue;
+
+            grains++;
+            int id = cells[start];
+            visited[start] = true;
+            int top = 0;
+            stack[top++] = start;
+
+            while (top > 0)
+            {
+                int i = stack[--top];
+                int count = index.Fill(i, neighbours);
+                for (int k = 0; k < count; k++)
+                {
+                    int n = neighbours[k];
+                    if (!visited[n] && cells[n] == id)
+                    {
+                        visited[n] = true;
+                        stack[top++] = n;
+                    }
+                }
+            }
+        }
+        return grains;
+    }
 }

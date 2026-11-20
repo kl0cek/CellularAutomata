@@ -6,6 +6,7 @@ using CellularAutomata;
 //   dotnet run -c Release -- config-mc.json  → rozrost ziaren Monte Carlo (Lab 3)
 //   dotnet run -c Release -- moj.json         → parametry z innego pliku
 //   dotnet run -c Release -- bench         → porównanie czasu: wektor vs macierz
+//   dotnet run -c Release -- bench-opt     → wersja naiwna vs zoptymalizowana (Lab 8)
 //   dotnet run -c Release -- demo          → podgląd MC na małej siatce 2D
 
 #if DEBUG
@@ -22,6 +23,11 @@ try
         VectorMatrixBenchmark.Run();
         return 0;
     }
+    if (argument == "bench-opt")
+    {
+        OptimizationBenchmark.Run(args[1..]);
+        return 0;
+    }
     if (argument == "demo")
     {
         McDemo.Run();
@@ -36,24 +42,12 @@ try
     Console.WriteLine(config.Algorithm == SimulationAlgorithm.CA
         ? $"Zarodki: {config.Nucleons}"
         : $"Stany Q: {config.States}, kroki MCS: {config.McSteps}, J: {config.J}, nowy stan: {config.McProposal}");
+    Console.WriteLine($"Wersja: {(config.Optimized ? "zoptymalizowana (Lab 8)" : "naiwna")}");
 
     //Symulacja
     var log = new SimulationLog();
     long start = Stopwatch.GetTimestamp();
-    int[] cells;
-    int steps;
-    if (config.Algorithm == SimulationAlgorithm.CA)
-    {
-        (cells, steps) = VectorGrainGrowth.Generate(config.SizeX, config.SizeY, config.SizeZ, config.Nucleons,
-                                                    config.Neighbourhood, config.Boundary, config.Seed, log);
-    }
-    else
-    {
-        cells = MonteCarloGrainGrowth.Generate(config.SizeX, config.SizeY, config.SizeZ, config.States, config.McSteps,
-                                               config.Neighbourhood, config.Boundary,
-                                               config.J, config.McProposal, config.Seed, log);
-        steps = config.McSteps;
-    }
+    var (cells, steps) = Simulate(config, log);
     double simulationMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
 
     Console.WriteLine($"\nAlokacja pamięci: {log.AllocationMs,10:F3} ms");
@@ -80,11 +74,15 @@ try
     Console.WriteLine($"\nSymulacja razem: {simulationMs:F2} ms ({steps} kroków)");
 
     // Liczba ziaren na końcu (spójne obszary o tym samym ID) – poza pomiarem czasu symulacji.
-    int grains = GrainAnalysis.CountGrains(cells, config.SizeX, config.SizeY, config.SizeZ, config.Neighbourhood, config.Boundary);
+    int grains = config.Optimized
+        ? GrainAnalysis.CountGrainsFast(cells, config.SizeX, config.SizeY, config.SizeZ, config.Neighbourhood, config.Boundary)
+        : GrainAnalysis.CountGrains(cells, config.SizeX, config.SizeY, config.SizeZ, config.Neighbourhood, config.Boundary);
     Console.WriteLine($"Ziarna na końcu: {grains:N0}, średnia wielkość: {(double)cells.Length / grains:F1} komórek");
 
     // Zapis mikrostruktury
-    var file = ResultWriter.WriteMorphology(config.MorphologyPath, config.SizeX, config.SizeY, config.SizeZ, cells);
+    var file = config.Optimized
+        ? ResultWriter.WriteMorphologyFast(config.MorphologyPath, config.SizeX, config.SizeY, config.SizeZ, cells)
+        : ResultWriter.WriteMorphology(config.MorphologyPath, config.SizeX, config.SizeY, config.SizeZ, cells);
     Console.WriteLine($"Plik {Path.GetFullPath(config.MorphologyPath)} ({file.Bytes / 1e6:F1} MB):");
     Console.WriteLine($"  utworzenie: {file.CreateMs:F3} ms, zapis: {file.WriteMs:F3} ms");
 
@@ -101,3 +99,19 @@ catch (Exception ex) when (ex is FormatException or ArgumentException or IOExcep
     return 1;
 }
 return 0;
+
+// Wybór algorytmu (CA/MC) i wersji (naiwna/zoptymalizowana); zwraca siatkę i liczbę kroków.
+static (int[] Cells, int Steps) Simulate(SimulationConfig c, SimulationLog log)
+{
+    if (c.Algorithm == SimulationAlgorithm.CA)
+        return c.Optimized
+            ? FrontierGrainGrowth.Generate(c.SizeX, c.SizeY, c.SizeZ, c.Nucleons, c.Neighbourhood, c.Boundary, c.Seed, log)
+            : VectorGrainGrowth.Generate(c.SizeX, c.SizeY, c.SizeZ, c.Nucleons, c.Neighbourhood, c.Boundary, c.Seed, log);
+
+    int[] cells = c.Optimized
+        ? FastMonteCarloGrainGrowth.Generate(c.SizeX, c.SizeY, c.SizeZ, c.States, c.McSteps, c.Neighbourhood, c.Boundary,
+                                             c.J, c.McProposal, c.Seed, log)
+        : MonteCarloGrainGrowth.Generate(c.SizeX, c.SizeY, c.SizeZ, c.States, c.McSteps, c.Neighbourhood, c.Boundary,
+                                         c.J, c.McProposal, c.Seed, log);
+    return (cells, c.McSteps);
+}

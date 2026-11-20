@@ -17,13 +17,7 @@ public static class MonteCarloGrainGrowth
                                  SimulationLog? log = null, Action<int, int[], double>? onStep = null)
     {
         // onStep (opcjonalny) dostaje po każdym kroku: numer MCS, siatkę i energię – używa go tryb demo.
-        if (states < 2)
-            throw new ArgumentException("Liczba stanów początkowych (States) musi wynosić co najmniej 2.");
-        CaRules.Validate(sizeX, sizeY, sizeZ, states);
-        if (mcSteps < 1)
-            throw new ArgumentException("Liczba kroków MCS musi być dodatnia.");
-        if (j <= 0)
-            throw new ArgumentException("J musi być > 0.");
+        Validate(sizeX, sizeY, sizeZ, states, mcSteps, j);
 
         var rng = new Random(seed);
 
@@ -89,6 +83,18 @@ public static class MonteCarloGrainGrowth
         return cells;
     }
 
+    // Wspólne z wersją zoptymalizowaną (FastMonteCarloGrainGrowth).
+    internal static void Validate(int sizeX, int sizeY, int sizeZ, int states, int mcSteps, double j)
+    {
+        if (states < 2)
+            throw new ArgumentException("Liczba stanów początkowych (States) musi wynosić co najmniej 2.");
+        CaRules.Validate(sizeX, sizeY, sizeZ, states);
+        if (mcSteps < 1)
+            throw new ArgumentException("Liczba kroków MCS musi być dodatnia.");
+        if (j <= 0)
+            throw new ArgumentException("J musi być > 0.");
+    }
+
     private static double TotalEnergy(int[] cells, int sizeX, int sizeY, int sizeZ,
                                       (int Dx, int Dy, int Dz)[] offsets, Boundary boundary, double j)
     {
@@ -132,7 +138,8 @@ public static class MonteCarloGrainGrowth
     }
 
     // Tasowanie Fishera–Yatesa: losowa kolejność odwiedzania komórek w każdym kroku MCS.
-    private static void Shuffle(int[] array, Random rng)
+    // Wersja zoptymalizowana używa tej samej metody, żeby kolejność losowań była identyczna.
+    internal static void Shuffle(int[] array, Random rng)
     {
         for (int i = array.Length - 1; i > 0; i--)
         {

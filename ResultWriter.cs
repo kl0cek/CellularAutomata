@@ -1,3 +1,4 @@
+using System.Buffers.Text;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -40,6 +41,51 @@ public static class ResultWriter
         double writeMs = Stopwatch.GetElapsedTime(t).TotalMilliseconds;
 
         return new FileWriteTime(createMs, writeMs, new FileInfo(path).Length);
+    }
+
+    // To samo co WriteMorphology (ten sam plik co do bajtu), ale szybciej (Lab 8): liczby formatujemy
+    // od razu do bufora bajtów (Utf8Formatter), zamiast wołać StreamWriter.Write osiem razy na linię.
+    public static FileWriteTime WriteMorphologyFast(string path, int sizeX, int sizeY, int sizeZ, int[] cells)
+    {
+        long t = Stopwatch.GetTimestamp();
+        CreateDirectoryFor(path);
+        var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1);
+        var buffer = new byte[1 << 20];
+        double createMs = Stopwatch.GetElapsedTime(t).TotalMilliseconds;
+
+        t = Stopwatch.GetTimestamp();
+        using (stream)
+        {
+            int used = Encoding.UTF8.GetBytes($"{sizeX} {sizeY} {sizeZ} xSize ySize zSize{Environment.NewLine}", buffer);
+            const int maxLine = 4 * 11 + 4; // cztery liczby int i separatory
+
+            for (int z = 0; z < sizeZ; z++)
+                for (int y = 0; y < sizeY; y++)
+                    for (int x = 0; x < sizeX; x++)
+                    {
+                        if (buffer.Length - used < maxLine)
+                        {
+                            stream.Write(buffer, 0, used);
+                            used = 0;
+                        }
+                        used += WriteInt(buffer, used, x, (byte)' ');
+                        used += WriteInt(buffer, used, y, (byte)' ');
+                        used += WriteInt(buffer, used, z, (byte)' ');
+                        used += WriteInt(buffer, used, cells[x + sizeX * (y + sizeY * z)], (byte)'\n');
+                    }
+            stream.Write(buffer, 0, used);
+        }
+        double writeMs = Stopwatch.GetElapsedTime(t).TotalMilliseconds;
+
+        return new FileWriteTime(createMs, writeMs, new FileInfo(path).Length);
+    }
+
+    // Zapisuje liczbę i znak po niej; zwraca liczbę zapisanych bajtów.
+    private static int WriteInt(byte[] buffer, int at, int value, byte separator)
+    {
+        Utf8Formatter.TryFormat(value, buffer.AsSpan(at), out int written);
+        buffer[at + written] = separator;
+        return written + 1;
     }
 
     // Czas każdego kroku (nadpisywany przy każdym uruchomieniu).
